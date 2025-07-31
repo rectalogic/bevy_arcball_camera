@@ -9,8 +9,21 @@ pub struct ArcballCameraPlugin;
 
 impl Plugin for ArcballCameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (zoom, rotate, update).chain());
+        app.init_resource::<AccumulatedTouchMotion>()
+            .init_resource::<AccumulatedTouchPinch>()
+            .add_systems(PreUpdate, accumulate_touches)
+            .add_systems(Update, (zoom, rotate, update).chain());
     }
+}
+
+#[derive(Default, Resource)]
+struct AccumulatedTouchMotion {
+    delta: Vec2,
+}
+
+#[derive(Default, Resource)]
+struct AccumulatedTouchPinch {
+    distance: f32,
 }
 
 // Based on this converted to Quat
@@ -33,6 +46,8 @@ impl ArcballCamera {
         }
     }
 
+    /// Rotate to a position on a sphere `distance` from `look_at`
+    /// that is `x` radians rotated around X axis, and `y` radians around Y axis.
     pub fn rotate_xy(&mut self, x: f32, y: f32) {
         self.rotation *= Quat::from_rotation_x(x) * Quat::from_rotation_y(y);
     }
@@ -49,25 +64,46 @@ impl Default for ArcballCamera {
     }
 }
 
-fn zoom(arcball_cameras: Query<&mut ArcballCamera>, mouse_scroll: Res<AccumulatedMouseScroll>) {
-    for mut arcball in arcball_cameras {
-        if !arcball.enabled {
-            continue;
+fn accumulate_touches(
+    touches: Res<Touches>,
+    mut accumulated_touch_motion: ResMut<AccumulatedTouchMotion>,
+    mut accumulated_touch_pinch: ResMut<AccumulatedTouchPinch>,
+) {
+    let mut touches_iter = touches.iter();
+    let touch_sequence = (
+        touches_iter.next(),
+        touches_iter.next(),
+        touches_iter.next(),
+    );
+    match touch_sequence {
+        (Some(touch), None, None) => {
+            accumulated_touch_pinch.distance = 0.0;
+            accumulated_touch_motion.delta = touch.delta();
         }
-        let scroll = match mouse_scroll.unit {
-            MouseScrollUnit::Line => mouse_scroll.delta.y * 16.0,
-            MouseScrollUnit::Pixel => mouse_scroll.delta.y,
-        };
-        arcball.distance += scroll / 100.0;
+        (Some(touch1), Some(touch2), None) => {
+            accumulated_touch_motion.delta = Vec2::ZERO;
+            accumulated_touch_pinch.distance = touch1.position().distance(touch2.position())
+                - touch1
+                    .previous_position()
+                    .distance(touch2.previous_position());
+        }
+        _ => {
+            accumulated_touch_motion.delta = Vec2::ZERO;
+            accumulated_touch_pinch.distance = 0.0;
+        }
     }
 }
 
-fn rotate(
+fn zoom(
     arcball_cameras: Query<(&mut ArcballCamera, &Camera)>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mouse_motion: Res<AccumulatedMouseMotion>,
+    mouse_scroll: Res<AccumulatedMouseScroll>,
+    touch_pinch: Res<AccumulatedTouchPinch>,
 ) {
-    if !mouse_buttons.pressed(MouseButton::Left) {
+    let distance = match mouse_scroll.unit {
+        MouseScrollUnit::Line => mouse_scroll.delta.y * 16.0,
+        MouseScrollUnit::Pixel => mouse_scroll.delta.y,
+    } + touch_pinch.distance;
+    if distance == 0.0 {
         return;
     }
 
@@ -75,15 +111,37 @@ fn rotate(
         if !arcball.enabled {
             continue;
         }
+        if let Some(viewport_size) = camera.logical_viewport_size() {
+            arcball.distance += distance / (viewport_size.length() / 2.0);
+        }
+    }
+}
 
-        let delta = mouse_motion.delta;
-        if delta != Vec2::ZERO {
-            if let Some(viewport_size) = camera.logical_viewport_size() {
-                let viewport_size = viewport_size / 2.0;
-                let horizontal_angle = (-delta.x / viewport_size.x) * FRAC_PI_4;
-                let vertical_angle = (-delta.y / viewport_size.y) * FRAC_PI_4;
-                arcball.rotate_xy(vertical_angle, horizontal_angle);
-            }
+fn rotate(
+    arcball_cameras: Query<(&mut ArcballCamera, &Camera)>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
+    touch_motion: Res<AccumulatedTouchMotion>,
+) {
+    let mouse_delta = if mouse_buttons.pressed(MouseButton::Left) {
+        mouse_motion.delta
+    } else {
+        Vec2::ZERO
+    };
+    let delta = mouse_delta + touch_motion.delta;
+    if delta == Vec2::ZERO {
+        return;
+    }
+    for (mut arcball, camera) in arcball_cameras {
+        if !arcball.enabled {
+            continue;
+        }
+
+        if let Some(viewport_size) = camera.logical_viewport_size() {
+            let viewport_size = viewport_size / 2.0;
+            let horizontal_angle = (-delta.x / viewport_size.x) * FRAC_PI_4;
+            let vertical_angle = (-delta.y / viewport_size.y) * FRAC_PI_4;
+            arcball.rotate_xy(vertical_angle, horizontal_angle);
         }
     }
 }
