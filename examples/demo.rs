@@ -38,5 +38,5 @@ fn setup(
         Transform::from_xyz(0.0, -1.0, 1.5),
     ));
     commands.spawn((PointLight::default(), Transform::from_xyz(3.0, 3.0, 2.0)));
-    commands.spawn((Camera3d::default(), ArcballCamera::new(-5.0)));
+    commands.spawn((Camera3d::default(), ArcballCamera::new(5.0)));
 }

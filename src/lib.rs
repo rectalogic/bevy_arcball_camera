@@ -11,6 +11,7 @@ impl Plugin for ArcballCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AccumulatedTouchMotion>()
             .init_resource::<AccumulatedTouchPinch>()
+            .add_systems(Startup, update)
             .add_systems(PreUpdate, accumulate_touches)
             .add_systems(Update, (zoom, rotate, update).chain());
     }
@@ -31,8 +32,10 @@ struct AccumulatedTouchPinch {
 #[derive(Component, Debug)]
 #[require(Transform, Camera3d)]
 pub struct ArcballCamera {
-    /// Whether camera currently responds to user input
-    pub enabled: bool,
+    /// Whether camera zoom responds to user input
+    pub zoom_enabled: bool,
+    /// Whether camera orbit responds to user input
+    pub orbit_enabled: bool,
     pub look_at: Vec3,
     pub distance: f32,
     rotation: Quat,
@@ -57,7 +60,8 @@ impl Default for ArcballCamera {
     fn default() -> Self {
         Self {
             distance: 1.0,
-            enabled: true,
+            zoom_enabled: true,
+            orbit_enabled: true,
             look_at: Vec3::default(),
             rotation: Quat::default(),
         }
@@ -108,11 +112,12 @@ fn zoom(
     }
 
     for (mut arcball, camera) in arcball_cameras {
-        if !arcball.enabled {
+        if !arcball.zoom_enabled {
             continue;
         }
         if let Some(viewport_size) = camera.logical_viewport_size() {
-            arcball.distance += distance / (viewport_size.length() / 2.0);
+            arcball.distance =
+                (arcball.distance - distance / (viewport_size.length() / 2.0)).max(0.0);
         }
     }
 }
@@ -133,7 +138,7 @@ fn rotate(
         return;
     }
     for (mut arcball, camera) in arcball_cameras {
-        if !arcball.enabled {
+        if !arcball.orbit_enabled {
             continue;
         }
 
@@ -149,7 +154,7 @@ fn rotate(
 fn update(arcball_transforms: Query<(&ArcballCamera, &mut Transform), Changed<ArcballCamera>>) {
     for (arcball, mut transform) in arcball_transforms {
         // Calculate position based on quaternion orientation
-        let forward = arcball.rotation * (Vec3::Z * -arcball.distance);
+        let forward = arcball.rotation * (Vec3::Z * arcball.distance);
 
         transform.translation = arcball.look_at + forward;
 
